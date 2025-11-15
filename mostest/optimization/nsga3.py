@@ -259,13 +259,20 @@ class NSGA3:
         return best
 
     def batch_tournament_selection(self, population: List[Chromosome], num_selections: int) -> List[Chromosome]:
+        """
+        Batch tournament selection with sampling without replacement
+        For each tournament, randomly selects tournament_size individuals without replacement
+        This ensures consistency with the original tournament_selection logic
+        """
         pop_size = len(population)
 
         # Extract ranks to numpy array for faster access
         ranks = np.array([ind.rank for ind in population], dtype=np.int64)
 
-        # Generate all tournament indices at once (num_selections x tournament_size)
-        tournament_indices = np.random.randint(0, pop_size, size=(num_selections, self.tournament_size), dtype=np.int64)
+        # Generate tournament indices without replacement for each selection
+        tournament_indices = np.zeros((num_selections, self.tournament_size), dtype=np.int64)
+        for i in range(num_selections):
+            tournament_indices[i] = np.random.choice(pop_size, size=self.tournament_size, replace=False)
 
         # Use NumPy vectorization (still much faster than original loop)
         tournament_ranks = ranks[tournament_indices]  # shape: (num_selections, tournament_size)
@@ -276,6 +283,10 @@ class NSGA3:
         return [population[idx] for idx in selected_indices]
 
     def create_offspring(self, population: List[Chromosome], generation: int, datalist, psnr_threshold) -> List[Chromosome]:
+        """
+        Create offspring population with guaranteed size
+        Continues generating until reaching population_size or max attempts
+        """
         offspring = []
         pabr = tqdm(total=self.population_size, desc="Creating Offspring")
 
@@ -283,36 +294,43 @@ class NSGA3:
             generation, self.max_generations
         )
 
-        num_pairs = (self.population_size + 1) // 2
-        num_parents_needed = num_pairs * 2
+        # Maximum attempts to prevent infinite loops
+        max_attempts = self.population_size * 3
+        attempts = 0
 
-        start_time = time.time()
-        selected_parents = self.batch_tournament_selection(population, num_parents_needed)
-        end_time = time.time()
-        print("batch_tournament_selection", end_time - start_time)
+        while len(offspring) < self.population_size and attempts < max_attempts:
+            # Calculate how many more offspring we need
+            remaining = self.population_size - len(offspring)
+            num_pairs = (remaining + 1) // 2
+            num_parents_needed = num_pairs * 2
 
-        # Create offspring in pairs
-        for i in range(num_pairs):
-            parent1 = selected_parents[2 * i]
-            parent2 = selected_parents[2 * i + 1]
+            # Select parents
+            selected_parents = self.batch_tournament_selection(population, num_parents_needed)
 
-            child1, child2 = self.genetic_ops.sbx_crossover(parent1, parent2)
+            # Create offspring in pairs
+            for i in range(num_pairs):
+                if len(offspring) >= self.population_size:
+                    break
 
-            child1 = self.genetic_ops.polynomial_mutation(child1, mutation_rate)
-            child2 = self.genetic_ops.polynomial_mutation(child2, mutation_rate)
+                parent1 = selected_parents[2 * i]
+                parent2 = selected_parents[2 * i + 1]
 
-            start_time = time.time()
-            valid1 = child1.check_chromosome_validity(datalist, psnr_threshold)
-            valid2 = child2.check_chromosome_validity(datalist, psnr_threshold)
-            end_time = time.time()
-            print("valid", end_time - start_time)
+                child1, child2 = self.genetic_ops.sbx_crossover(parent1, parent2)
+                child1 = self.genetic_ops.polynomial_mutation(child1, mutation_rate)
+                child2 = self.genetic_ops.polynomial_mutation(child2, mutation_rate)
 
-            if valid1:
-                offspring.append(child1)
-                pabr.update(1)
+                valid1 = child1.check_chromosome_validity(datalist, psnr_threshold)
+                valid2 = child2.check_chromosome_validity(datalist, psnr_threshold)
 
-            if valid2:
-                offspring.append(child2)
-                pabr.update(1)
+                if valid1:
+                    offspring.append(child1)
+                    pabr.update(1)
 
-        return offspring[:self.population_size]
+                if valid2:
+                    offspring.append(child2)
+                    pabr.update(1)
+
+                attempts += 1
+
+        pabr.close()
+        return offspring
