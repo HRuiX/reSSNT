@@ -65,25 +65,25 @@ try:
     logger.info("=" * 80)
 
     # 计算总测试数量
-    coverage_methods = ["NC-0.75","CC-19","KMNC-100","NBC-None","SNAC-None","TKNC-15","TKNP-25"]
+    coverage_methods = ["CC-19","KMNC-100","NBC-None","SNAC-None","TKNC-15","TKNP-25","NLC-None"]
     test_types = ["ade_pic","cov_update"]
     total_tests = 3 + len(coverage_methods) * len(test_types)  # 3个基础测试 + 循环测试
 
     current_test = 0
 
     # Test 1: Original Coverage
-    current_test += 1
-    print_test_header("Original Coverage", "Baseline", ori_config, current_test, total_tests)
-    testTool = CoverageTest(model_name, dataset, model_type, ori_config, checkpoint,
-                            dataset_path_prefix, save_data_path="1104-use-for-test/ori_cov",
-                            coverages_setting=coverages_settings)
-    res_data = testTool.build_val_coverage_info()
-    torch.save(res_data, f"/home/ictt/xhr/code/DNNTesting/reSSNT/output-data-1104-use-for-test/00results_save/Original_Coverage_info.pt")
-    print_test_complete("Original Coverage")
+    # current_test += 1
+    # print_test_header("Original Coverage", "Baseline", ori_config, current_test, total_tests)
+    # testTool = CoverageTest(model_name, dataset, model_type, ori_config, checkpoint,
+    #                         dataset_path_prefix, save_data_path="1104-use-for-test/ori_cov",
+    #                         coverages_setting=coverages_settings)
+    # res_data = testTool.build_val_coverage_info()
+    # torch.save(res_data, f"/home/ictt/xhr/code/DNNTesting/reSSNT/output-data-1104-use-for-test/00results_save/Original_Coverage_info.pt")
+    # print_test_complete("Original Coverage")
 
     # Test 3: MosTest Coverage (Pareto Front)
     current_test += 1
-    mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1113-e767c360/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024-pareto.py"
+    mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1114-7470e8a8/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024-pareto.py"
     print_test_header("MosTest Coverage [Pareto Front]", "MosTest-PF", mostest_config, current_test, total_tests)
     testTool = CoverageTest(model_name, dataset, model_type, mostest_config, checkpoint,
                             dataset_path_prefix, save_data_path="1104-use-for-test/PF_mostest",
@@ -94,7 +94,7 @@ try:
 
     # Test 2: MosTest Coverage (ALL)
     current_test += 1
-    mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1113-e767c360/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024-6h.py"
+    mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1114-7470e8a8/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024-6h.py"
     print_test_header("MosTest Coverage [ALL]", "MosTest-6h", mostest_config, current_test, total_tests)
     testTool = CoverageTest(model_name, dataset, model_type, mostest_config, checkpoint,
                             dataset_path_prefix, save_data_path="1104-use-for-test/ALL_mostest",
@@ -104,15 +104,15 @@ try:
     print_test_complete("MosTest Coverage [ALL]")
 
 
-    # Test 2: MosTest Coverage (ALL)
-    current_test += 1
-    mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1113-e767c360/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024.py"
-    print_test_header("MosTest Coverage [ALL]", "MosTest-All", mostest_config, current_test, total_tests)
-    testTool = CoverageTest(model_name, dataset, model_type, mostest_config, checkpoint,
-                            dataset_path_prefix, save_data_path="1104-use-for-test/ALL_mostest",
-                            coverages_setting=coverages_settings)
-    res_data = testTool.build_val_coverage_info()
-    torch.save(res_data, f"/home/ictt/xhr/code/DNNTesting/reSSNT/output-data-1104-use-for-test/00results_save/MosTest-All_info.pt")
+    # # Test 2: MosTest Coverage (ALL)
+    # current_test += 1
+    # mostest_config = "/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-1114-7470e8a8/cityscapes/Transformer/Mask2Former-Swin_S-cityscapes/generations/mask2former_swin-s_8xb2-90k_cityscapes-512x1024.py"
+    # print_test_header("MosTest Coverage [ALL]", "MosTest-All", mostest_config, current_test, total_tests)
+    # testTool = CoverageTest(model_name, dataset, model_type, mostest_config, checkpoint,
+    #                         dataset_path_prefix, save_data_path="1104-use-for-test/ALL_mostest",
+    #                         coverages_setting=coverages_settings)
+    # res_data = testTool.build_val_coverage_info()
+    # torch.save(res_data, f"/home/ictt/xhr/code/DNNTesting/reSSNT/output-data-1104-use-for-test/00results_save/MosTest-All_info.pt")
 
 
     # Test 4-N: Coverage Method Tests

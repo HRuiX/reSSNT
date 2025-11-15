@@ -33,7 +33,7 @@ class NormalizeInverse(torchvision.transforms.Normalize):
         # return super().__call__(tensor)
 
 
-def get_file_device(dataset, model_type, ckpt_root="./ckpt", data_root="/home/ictt/xhr/code/DNNTesting/reSSNT/data"):
+def get_file_device(dataset, model_type, ckpt_root="/home/ictt/xhr/code/DNNTesting/reSSNT/ckpt", data_root="/home/ictt/xhr/code/DNNTesting/reSSNT/data"):
     """
     Get model configuration files and dataset paths based on dataset and model type.
 
