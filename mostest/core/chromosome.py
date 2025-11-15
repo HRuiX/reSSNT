@@ -469,6 +469,134 @@ class Chromosome:
         return True
 
     @staticmethod
+    def _enforce_transform_distribution(
+        population: List['Chromosome'],
+        transform_configs: Dict,
+        datalist,
+        psnr_threshold,
+        enable_threshold: float = 0.5,
+        max_percentage: float = 0.5
+    ) -> List['Chromosome']:
+        """
+        Enforce transform distribution constraints:
+        1. Each transform must be used in at least one individual
+        2. No transform can be used in more than max_percentage (50%) of individuals
+
+        Args:
+            population: Population to enforce constraints on
+            transform_configs: Transform configuration dictionary
+            datalist: Dataset list for validation
+            psnr_threshold: PSNR threshold for validity check
+            enable_threshold: Threshold for considering a transform enabled
+            max_percentage: Maximum percentage of population using any transform (default 0.5)
+
+        Returns:
+            Modified population with enforced constraints
+        """
+        if not population:
+            return population
+
+        num_transforms = len(transform_configs)
+        population_size = len(population)
+        max_count = int(population_size * max_percentage)
+
+        console.print(f"[dim]  Enforcing transform distribution constraints...[/dim]")
+
+        # Count usage of each transform
+        transform_usage = [0] * num_transforms  # Count of individuals using each transform
+        individuals_using_transform = [[] for _ in range(num_transforms)]  # List of indices
+
+        for idx, chromosome in enumerate(population):
+            for transform_idx in range(num_transforms):
+                start_idx, _ = chromosome.get_gene_index(transform_idx)
+                if chromosome.genes[start_idx] >= enable_threshold:
+                    transform_usage[transform_idx] += 1
+                    individuals_using_transform[transform_idx].append(idx)
+
+        # Step 1: Ensure each transform is used at least once
+        unused_transforms = [i for i in range(num_transforms) if transform_usage[i] == 0]
+
+        if unused_transforms:
+            console.print(f"[yellow]  Found {len(unused_transforms)} unused transforms, forcing activation...[/yellow]")
+
+            for transform_idx in unused_transforms:
+                # Find an individual with fewer enabled transforms to add this transform
+                # Try to find individuals with only 1 or 2 transforms enabled
+                candidates = []
+                for idx, chromosome in enumerate(population):
+                    enabled_count = sum(1 for t in range(num_transforms)
+                                      if chromosome.genes[chromosome.get_gene_index(t)[0]] >= enable_threshold)
+                    if enabled_count < 3:  # Prefer individuals with fewer transforms
+                        candidates.append((idx, enabled_count))
+
+                if not candidates:
+                    # If all have 3 transforms, just pick a random one
+                    target_idx = np.random.randint(0, population_size)
+                else:
+                    # Pick the one with fewest transforms
+                    candidates.sort(key=lambda x: x[1])
+                    target_idx = candidates[0][0]
+
+                # Enable this transform in the selected individual
+                chromosome = population[target_idx]
+                start_idx, _ = chromosome.get_gene_index(transform_idx)
+                chromosome.genes[start_idx] = np.random.uniform(0.65, 1.0)
+
+                # Re-validate the chromosome
+                if not chromosome.check_chromosome_validity(datalist, psnr_threshold):
+                    console.print(f"[yellow]    Warning: Forced transform {transform_idx} made chromosome invalid, reverting...[/yellow]")
+                    chromosome.genes[start_idx] = np.random.uniform(0.0, 0.45)
+                else:
+                    transform_usage[transform_idx] += 1
+                    individuals_using_transform[transform_idx].append(target_idx)
+                    console.print(f"[green]    Enabled transform {transform_idx} in individual {target_idx}[/green]")
+
+        # Step 2: Ensure no transform exceeds max_percentage
+        overused_transforms = [i for i in range(num_transforms) if transform_usage[i] > max_count]
+
+        if overused_transforms:
+            console.print(f"[yellow]  Found {len(overused_transforms)} overused transforms (>{max_percentage*100}%), reducing...[/yellow]")
+
+            for transform_idx in overused_transforms:
+                excess_count = transform_usage[transform_idx] - max_count
+                # Randomly select individuals to disable this transform
+                individuals_to_modify = np.random.choice(
+                    individuals_using_transform[transform_idx],
+                    size=excess_count,
+                    replace=False
+                )
+
+                for idx in individuals_to_modify:
+                    chromosome = population[idx]
+                    start_idx, _ = chromosome.get_gene_index(transform_idx)
+
+                    # Check how many transforms this individual has
+                    enabled_count = sum(1 for t in range(num_transforms)
+                                      if chromosome.genes[chromosome.get_gene_index(t)[0]] >= enable_threshold)
+
+                    # Only disable if the individual has more than 1 transform
+                    if enabled_count > 1:
+                        chromosome.genes[start_idx] = np.random.uniform(0.0, 0.45)
+
+                        # Re-validate
+                        if not chromosome.check_chromosome_validity(datalist, psnr_threshold):
+                            console.print(f"[yellow]    Warning: Disabling transform {transform_idx} made chromosome invalid, reverting...[/yellow]")
+                            chromosome.genes[start_idx] = np.random.uniform(0.65, 1.0)
+                        else:
+                            transform_usage[transform_idx] -= 1
+                            console.print(f"[dim]    Disabled transform {transform_idx} in individual {idx}[/dim]")
+                    else:
+                        console.print(f"[yellow]    Skipped individual {idx} (only has 1 transform)[/yellow]")
+
+        # Print final distribution
+        console.print(f"[green]  Transform distribution:[/green]")
+        for i in range(num_transforms):
+            percentage = (transform_usage[i] / population_size) * 100
+            console.print(f"    Transform {i}: {transform_usage[i]}/{population_size} ({percentage:.1f}%)")
+
+        return population
+
+    @staticmethod
     def create_random_population(
         population_size: int,
         transform_configs: List[TransformConfig],
@@ -499,6 +627,12 @@ class Chromosome:
             if valid:
                 population.append(chromosome)
                 pbar.update()
+
+        # Apply transform distribution constraints
+        population = Chromosome._enforce_transform_distribution(
+            population, transform_configs, datalist, psnr_threshold
+        )
+
         return population[:population_size]
 
 from torch.utils.data import DataLoader, Dataset

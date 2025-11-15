@@ -333,4 +333,13 @@ class NSGA3:
                 attempts += 1
 
         pabr.close()
+
+        # Apply transform distribution constraints to offspring
+        if offspring and len(offspring) > 0:
+            # Get transform_configs from first chromosome
+            transform_configs = offspring[0].transform_configs
+            offspring = Chromosome._enforce_transform_distribution(
+                offspring, transform_configs, datalist, psnr_threshold
+            )
+
         return offspring
