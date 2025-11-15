@@ -45,8 +45,8 @@ class MOSTestConfig:
         # ==================== 种群参数 Population Parameters ====================
         population_size: int = 100,
         max_generations: int = 1000,
-        max_runtime_hours: int = 12,
-        psnr_threshold:int = 15,
+        max_runtime_hours: int = 6,
+        psnr_threshold:int = 20,
 
         # ==================== 覆盖率参数 Coverage Parameters ====================
         top_k: int = 25,              # TKNP覆盖率的top-k参数
@@ -55,7 +55,7 @@ class MOSTestConfig:
         # ==================== NSGA-III 参数 NSGA-III Parameters ====================
         num_objectives: int = 3,       # 目标函数数量
         # ref_point_divisions: int = 15,  # 参考点分层参数
-        ref_point_divisions: int = 12,  # 参考点分层参数
+        ref_point_divisions: int = 11,  # 参考点分层参数
         crossover_prob: float = 0.9,   # 交叉概率
         tournament_size: int = 2,      # 锦标赛选择大小
 
@@ -79,6 +79,7 @@ class MOSTestConfig:
         transform_sequence: list = None,  # balanced, aggressive, conservative
         spatial_enabled: bool = True,            # 是否启用空间变换
         single_transform_init: bool = True,       # 初始种群是否单变换
+        max_transforms: int = 1,                # 最大变换数量
 
         # 染色体编码参数 Chromosome Encoding Parameters
         enable_threshold: float = 0.5,            # 变换启用阈值
@@ -143,6 +144,7 @@ class MOSTestConfig:
         self.transform_sequence = transform_sequence
         self.spatial_enabled = spatial_enabled
         self.single_transform_init = single_transform_init
+        self.max_transforms = max_transforms
 
         # 染色体编码参数
         self.enable_threshold = enable_threshold

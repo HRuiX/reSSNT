@@ -15,6 +15,9 @@ from typing import List, Tuple, Dict, Optional, Union
 import albumentations as A
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
+import uuid
+from skimage.metrics import peak_signal_noise_ratio as psnr
 from rich.console import Console
 from functools import lru_cache
 import hashlib
@@ -95,8 +98,7 @@ class Chromosome:
         self.genes_per_transform = []
         for _, config in transform_configs.items():
             gene_count = 1 + config.num_params
-            if spatial_enabled:
-                gene_count += 4
+            if spatial_enabled: gene_count += 4
             self.genes_per_transform.append(gene_count)
 
         self.total_genes = 1 + sum(self.genes_per_transform)
@@ -263,9 +265,6 @@ class Chromosome:
                 continue
 
         composed_transform = A.Compose(transforms_list)
-        # self._cached_transform = composed_transform
-        # self._cached_genes_hash = current_hash
-
         return composed_transform
 
     def get_transform_summary(self) -> List[Dict]:
@@ -358,7 +357,7 @@ class Chromosome:
         return colored_seg
 
     def apply_transform(self, image: np.ndarray, mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
+        self.mask_ = """
         Apply transform to image and mask
 
         Args:
@@ -400,7 +399,7 @@ class Chromosome:
             # No enabled transforms, randomly enable one
             selected = np.random.randint(0, self.num_transforms)
             start_idx, _ = self.get_gene_index(selected)
-            self.genes[start_idx] = np.random.uniform(0.7, 1.0)
+            self.genes[start_idx] = np.random.uniform(0.65, 1.0)
         elif len(enabled_indices) > max_transforms:
             # Too many enabled, randomly keep max_transforms
             selected_indices = np.random.choice(enabled_indices, size=max_transforms, replace=False)
@@ -408,7 +407,7 @@ class Chromosome:
                 start_idx, _ = self.get_gene_index(i)
                 if i in selected_indices:
                     if self.genes[start_idx] < enable_threshold:
-                        self.genes[start_idx] = np.random.uniform(0.7, 1.0)
+                        self.genes[start_idx] = np.random.uniform(0.65, 1.0)
                 else:
                     self.genes[start_idx] = np.random.uniform(0.0, 0.45)
 
@@ -437,10 +436,44 @@ class Chromosome:
         return (f"Chromosome(transforms={enabled_count}/{self.num_transforms}, "
                 f"objectives={self.objectives}, rank={self.rank})")
 
+    def check_chromosome_validity(self, datalist, psnr_threshold) -> bool:
+        """
+        检查种群中所有染色体的有效性
+
+        Args:
+            population: 种群
+
+        Returns:
+            是否所有染色体均有效
+        """
+        seed_idx = self.get_image_index()
+        file_name, seed_image, seed_mask = datalist[seed_idx]
+        transform, mutated_image, mutated_mask = self.apply_transform(seed_image, seed_mask)
+        if (transform is None) or np.all(mutated_image == seed_image) or (
+                psnr(seed_image, mutated_image) < psnr_threshold):
+            return False
+
+        finames = file_name.split("_")
+        uuids = str(uuid.uuid4())[:8]
+        finames = f"{finames[0]}_{str(transform[0]).split('(')[0]}_{uuids}_{'_'.join(finames[1:])}"
+        muta_data = {
+            "seed_idx": seed_idx,
+            "uuid": uuids,
+            "muta_image": mutated_image,
+            "muta_mask": mutated_mask,
+            "file_name": finames,
+        }
+
+        self.ori_file_name = file_name
+        self.muta_data = muta_data
+        return True
+
     @staticmethod
     def create_random_population(
         population_size: int,
         transform_configs: List[TransformConfig],
+        datalist,
+        psnr_threshold,
         spatial_enabled: bool = False,
         single_transform_init: bool = True,
         num_images: int = 1
@@ -458,13 +491,15 @@ class Chromosome:
         Returns:
             List of Chromosome objects
         """
-        return [Chromosome(
-            transform_configs,
-            spatial_enabled=spatial_enabled,
-            single_transform_init=single_transform_init,
-            num_images=num_images
-        ) for _ in range(population_size)]
-
+        population = []
+        pbar = tqdm(total=population_size,desc="Buliding population")
+        while len(population) < population_size:
+            chromosome = Chromosome(transform_configs,spatial_enabled=spatial_enabled,single_transform_init=single_transform_init,num_images=num_images)
+            valid = Chromosome.check_chromosome_validity(chromosome,datalist,psnr_threshold)
+            if valid:
+                population.append(chromosome)
+                pbar.update()
+        return population[:population_size]
 
 from torch.utils.data import DataLoader, Dataset
 

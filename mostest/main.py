@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import mmcv
 from multiprocessing import Pool
 from rich.console import Console
+from skimage.metrics import peak_signal_noise_ratio as psnr
 
 try:
     from .core.chromosome import Chromosome, MyDataset
@@ -73,6 +74,7 @@ def get_model_layers(model):
             cnt += 1
     return layer_dict
 
+
 def evaluate_chromosome_func(datas):
     # 计算F1: 神经行为覆盖 Compute F1: Neural behavior coverage
     func1, func2, func3 = datas["func1"], datas["func2"], datas["func3"]
@@ -86,31 +88,6 @@ def evaluate_chromosome_func(datas):
     gc.collect()
 
     return [f1_value, f2_value, f3_value]
-
-def _process_chromosome_mutation(args):
-    idx, chromosome, seed_idx, file_name, seed_image, seed_mask = args
-
-    try:
-        transform, mutated_image, mutated_mask = chromosome.apply_transform(seed_image, seed_mask)
-
-        finames = file_name.split("_")
-        finames = f"{finames[0]}_{str(transform[0]).split('(')[0]}_{str(uuid.uuid4())[:8]}_{'_'.join(finames[1:])}"
-
-        muta_data = {
-            "seed_idx": seed_idx,
-            "uuid":str(uuid.uuid4())[:8],
-            "muta_image": mutated_image,
-            "muta_mask": mutated_mask,
-            "file_name": finames,
-        }
-
-        if np.all(mutated_image == seed_image) or np.all(mutated_image == 0):
-            return (idx, False, None, None, None, None)
-
-        return (idx, True, muta_data, file_name, seed_idx, mutated_image)
-    except Exception as e:
-        print(f"Error processing chromosome {idx}: {e}")
-        return (idx, False, None, None, None, None)
 
 
 class MOSTest:
@@ -134,15 +111,15 @@ class MOSTest:
         self.model.eval()
 
         now = datetime.now()
-        day = now.strftime("%m%d")
+        day = now.strftime("%m%d-%H%M")
         self.output_dir = mostest_config.output_dir or Path(
-            f"./mostest_output/output-data-{day}-{str(uuid.uuid4())[:8]}/{self.dataset}/{self.model_type}/{self.model_name}")
+            f"/home/ictt/xhr/code/DNNTesting/reSSNT/mostest/mostest_output/output-data-{day}/{self.dataset}/{self.model_type}/{self.model_name}")
         # self.output_dir = mostest_config.output_dir or Path(
         #     f"./mostest_output/output-data-None/{self.dataset}/{self.model_type}/{self.model_name}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.coverage_save_path = self.output_dir / 'coverage'
         self.coverage_save_path.mkdir(parents=True, exist_ok=True)
-        self.TOOL_LOG_FILE_PATH = f"../temp/{self.dataset}/{self.model_type}/{self.model_name}"
+        self.TOOL_LOG_FILE_PATH = f"/home/ictt/xhr/code/DNNTesting/reSSNT/temp/{self.dataset}/{self.model_type}/{self.model_name}"
         self.generations_dir = self.output_dir / 'generations'
         self.generations_dir.mkdir(parents=True, exist_ok=True)
         self.pareto_fronts_dir = self.output_dir / 'pareto_fronts'
@@ -172,6 +149,7 @@ class MOSTest:
         self.muta_seed_prediction_cache = {}
 
         self.num_workers = mostest_config.num_workers
+        self.psnr_threshold = mostest_config.psnr_threshold
         self.optimizer = NSGA3(mostest_config=mostest_config)
         self.max_runtime_hours = mostest_config.max_runtime_hours
 
@@ -206,7 +184,7 @@ class MOSTest:
                 'boundary': [],
                 'activation': []
             },
-            'time':[]
+            'time': []
         }
 
     def _get_output_size(self) -> tuple:
@@ -239,9 +217,9 @@ class MOSTest:
                 self.handles.append(handle)
 
         if self.dataset == "ade20k":
-            img = mmcv.imread("../demo/demo-ade20k.jpg")
+            img = mmcv.imread("/home/ictt/xhr/code/DNNTesting/reSSNT/demo/demo-ade20k.jpg")
         elif self.dataset == "cityscapes":
-            img = mmcv.imread("../demo/demo.png")
+            img = mmcv.imread("/home/ictt/xhr/code/DNNTesting/reSSNT/demo/demo.png")
 
         self.layer_dict_keys_cnt = 0
         inference_model(self.model, img)
@@ -268,13 +246,14 @@ class MOSTest:
                         return
 
             if outputs.shape[0] != self.max_items:
-                sequence_length = outputs.shape[0]//self.max_items
+                sequence_length = outputs.shape[0] // self.max_items
                 tmp_outputs = outputs.reshape(self.max_items, sequence_length, outputs.shape[-2], outputs.shape[-1])
             elif outputs.shape[0] == self.max_items:
                 if len(outputs.size()) == 3:
                     tmp_outputs = outputs.reshape(self.max_items, 1, outputs.shape[-2], outputs.shape[-1])
                 elif len(outputs.size()) == 4:
-                    tmp_outputs = outputs.reshape(self.max_items, 1, outputs.shape[-3], outputs.shape[-2], outputs.shape[-1])
+                    tmp_outputs = outputs.reshape(self.max_items, 1, outputs.shape[-3], outputs.shape[-2],
+                                                  outputs.shape[-1])
             else:
                 print(name)
 
@@ -298,7 +277,8 @@ class MOSTest:
 
                 if idx not in self.layer_output_input_dict:
                     self.layer_output_input_dict[idx] = {}
-                self.layer_output_input_dict[idx][self.layer_dict_keys[self.layer_dict_keys_cnt]] = tmp_output.data.cpu().numpy()
+                self.layer_output_input_dict[idx][
+                    self.layer_dict_keys[self.layer_dict_keys_cnt]] = tmp_output.data.cpu().numpy()
 
                 del tmp_output
 
@@ -330,48 +310,27 @@ class MOSTest:
             pbar.update()
 
         use_dataloader_list = []
-        for chromosome in tqdm(population, desc=desc + " [1] get mutated data", leave=False):
-            seed_idx = chromosome.get_image_index()
-            file_name, seed_image, seed_mask = datalist[seed_idx]
+        for chromosome in tqdm(population, leave=False):
+            assert chromosome.muta_data is not None, "Muta data cache should be signed before evaluation."
+            muta_data = chromosome.muta_data
 
-            transform, mutated_image, mutated_mask = chromosome.apply_transform(seed_image, seed_mask)
+            use_dataloader_list.append((muta_data["uuid"], muta_data["muta_image"]))
 
-            finames = file_name.split("_")
-            uuids = str(uuid.uuid4())[:8]
-            finames = f"{finames[0]}_{str(transform[0]).split('(')[0]}_{uuids}_{'_'.join(finames[1:])}"
-            muta_data = {
-                "seed_idx": seed_idx,
-                "uuid":uuids,
-                "muta_image": mutated_image,
-                "muta_mask": mutated_mask,
-                "file_name": finames,
-            }
-
-            if np.all(mutated_image == seed_image) or np.all(mutated_image == 0) or psnr(seed_image, mutated_image)>self.mostest_config.psnr_threshold:
-                fault_cnt += 1
-                chromosome.muta_data = None
-                chromosome.objectives = [0.0, 0.0, 0.0]
-                update()
-                continue
-
-            chromosome.ori_file_name = file_name
-            chromosome.muta_data = muta_data
-
-            use_dataloader_list.append((uuids, mutated_image))
-
-        self.build_muta_seed_prediction_cache(use_dataloader_list,desc=desc+" [2] build muta seed prediction cache")
+        self.build_muta_seed_prediction_cache(use_dataloader_list, desc=desc + " build muta seed prediction cache")
 
         with Pool(processes=self.num_workers) as pool:
             for chromosome_idxs in range(0, len(population), self.num_workers):
-                results=[]
+                results = []
                 for chromosome_idx in range(chromosome_idxs, min(chromosome_idxs + self.num_workers, len(population))):
                     chromosome = population[chromosome_idx]
                     if chromosome.muta_data is None:
                         continue
                     seed_idx = chromosome.get_image_index()
 
-                    ori_layer_output_dict, ori_pred_sem_seg = self.get_prediction_with_cache(seed_idx, self.ori_seed_prediction_cache)
-                    muta_layer_output_dict, muta_pred_sem_seg = self.get_prediction_with_cache(chromosome.muta_data["uuid"], self.muta_seed_prediction_cache)
+                    ori_layer_output_dict, ori_pred_sem_seg = self.get_prediction_with_cache(seed_idx,
+                                                                                             self.ori_seed_prediction_cache)
+                    muta_layer_output_dict, muta_pred_sem_seg = self.get_prediction_with_cache(
+                        chromosome.muta_data["uuid"], self.muta_seed_prediction_cache)
 
                     file_name, seed_image, seed_mask = datalist[seed_idx]
                     mutated_mask = chromosome.muta_data["muta_mask"]
@@ -411,7 +370,8 @@ class MOSTest:
 
         return population
 
-    def _evaluate_population(self, population: List[Chromosome], datalist: Dict, desc: str = "evaluation") -> List[Chromosome]:
+    def _evaluate_population(self, population: List[Chromosome], datalist: Dict, desc: str = "evaluation") -> List[
+        Chromosome]:
         population = self._evaluate_chromosome(population, datalist, desc)
 
         gc.collect()
@@ -428,7 +388,8 @@ class MOSTest:
                 if muta_data is None:
                     print("Muta data is None, skipping coverage update.")
                 with coverage_lock:
-                    muta_layer_output_dict, _ = self.get_prediction_with_cache(muta_data["uuid"], self.muta_seed_prediction_cache)
+                    muta_layer_output_dict, _ = self.get_prediction_with_cache(muta_data["uuid"],
+                                                                               self.muta_seed_prediction_cache)
                     self.tknp_coverage.step(muta_layer_output_dict, muta_data["file_name"])
                     self.boundary_coverage.update(muta_data["muta_mask"])
                     self.activation_coverage.step(muta_layer_output_dict, muta_data["file_name"])
@@ -436,7 +397,6 @@ class MOSTest:
                 return True, None
             except Exception as e:
                 return False, e
-
 
         with ThreadPoolExecutor(max_workers=40) as executor:
             future_to_idx = {
@@ -459,9 +419,7 @@ class MOSTest:
 
     def save_generation_data(self, generation: int, population: List[Chromosome], pareto_front: List[Chromosome] = None,
                              save_images: bool = True):
-        # gen_dir = self.generations_dir / f'gen/gen_{generation:03d}'
         pareto_dir = self.generations_dir / 'pareto_front'
-        # gen_dir.mkdir(parents=True, exist_ok=True)
         pareto_dir.mkdir(parents=True, exist_ok=True)
 
         pareto_file_names = set()
@@ -472,13 +430,13 @@ class MOSTest:
 
         if save_images:
 
-            images_dir = self.generations_dir / 'cityscapes/leftImg8bit' / f'gen/gen_{generation:03d}'
-            masks_dir = self.generations_dir / 'cityscapes/gtFine' / f'gen/gen_{generation:03d}'
+            images_dir = self.generations_dir / 'cityscapes/leftImg8bit/val' / f'gen/gen_{generation:03d}'
+            masks_dir = self.generations_dir / 'cityscapes/gtFine/val' / f'gen/gen_{generation:03d}'
             images_dir.mkdir(parents=True, exist_ok=True)
             masks_dir.mkdir(parents=True, exist_ok=True)
 
-            pareto_images_dir = pareto_dir / 'cityscapes/leftImg8bit'
-            pareto_masks_dir = pareto_dir / 'cityscapes/gtFine'
+            pareto_images_dir = pareto_dir / 'cityscapes/leftImg8bit/val'
+            pareto_masks_dir = pareto_dir / 'cityscapes/gtFine/val'
             pareto_images_dir.mkdir(parents=True, exist_ok=True)
             pareto_masks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -549,7 +507,9 @@ class MOSTest:
 
             population_data.append(ind_data)
 
-        with open(gen_dir / 'population.json', 'w', encoding='utf-8') as f:
+        gen_log_dir = self.generations_dir / f'log/population'
+        gen_log_dir.mkdir(parents=True, exist_ok=True)
+        with open(gen_log_dir / f'population_{generation:03d}.json', 'w', encoding='utf-8') as f:
             json.dump(population_data, f, indent=2, ensure_ascii=False)
 
         status_data = {
@@ -583,7 +543,9 @@ class MOSTest:
             }
         }
 
-        with open(gen_dir / 'status.json', 'w', encoding='utf-8') as f:
+        gen_log_dir = self.generations_dir / f'log/status'
+        gen_log_dir.mkdir(parents=True, exist_ok=True)
+        with open(gen_log_dir / f'status_{generation:03d}.json', 'w', encoding='utf-8') as f:
             json.dump(status_data, f, indent=2, ensure_ascii=False)
 
         if pareto_front:
@@ -617,19 +579,20 @@ class MOSTest:
                 pred_sem_seg = result.pred_sem_seg.data.cpu().numpy()
             return layer_output_dict, pred_sem_seg
 
-    def build_ori_seed_prediction_cache(self,datalist, desc):
+    def build_ori_seed_prediction_cache(self, datalist, desc):
         if os.path.exists(self.TOOL_LOG_FILE_PATH + f"/ori_seed_prediction_cache-{self.max_items}.pth"):
-            self.ori_seed_prediction_cache = torch.load(self.TOOL_LOG_FILE_PATH + f"/ori_seed_prediction_cache-{self.max_items}.pth")
+            self.ori_seed_prediction_cache = torch.load(
+                self.TOOL_LOG_FILE_PATH + f"/ori_seed_prediction_cache-{self.max_items}.pth")
             return None
         ori_self_max_items = None
         with torch.no_grad():
-            for idx in tqdm(range(0,len(datalist),self.max_items), desc=desc, leave=False):
-                if idx+self.max_items > len(datalist):
+            for idx in tqdm(range(0, len(datalist), self.max_items), desc=desc, leave=False):
+                if idx + self.max_items > len(datalist):
                     ori_self_max_items = self.max_items
-                    self.max_items = len(datalist)-idx
+                    self.max_items = len(datalist) - idx
                     min_len = len(datalist)
                 else:
-                    min_len = idx+self.max_items
+                    min_len = idx + self.max_items
                 idxs = list(range(idx, min_len))
 
                 datas = [datalist[i][1] for i in idxs]
@@ -644,18 +607,19 @@ class MOSTest:
                     pred_sem_seg = result[i].pred_sem_seg.data.cpu().numpy()
                     self.ori_seed_prediction_cache[idxs[i]] = (cached_layer_dict, pred_sem_seg.copy())
 
-                del result,datas
+                del result, datas
                 gc.collect()
                 torch.cuda.empty_cache()
 
-        torch.save(self.ori_seed_prediction_cache, self.TOOL_LOG_FILE_PATH + f"/ori_seed_prediction_cache-{ori_self_max_items}.pth")
+        torch.save(self.ori_seed_prediction_cache,
+                   self.TOOL_LOG_FILE_PATH + f"/ori_seed_prediction_cache-{ori_self_max_items}.pth")
         if ori_self_max_items is not None:
             self.max_items = ori_self_max_items
 
     def build_muta_seed_prediction_cache(self, datalist, desc):
         ori_self_max_items = None
         with torch.no_grad():
-            for idx in tqdm(range(0,len(datalist),self.max_items), desc=desc, leave=False):
+            for idx in tqdm(range(0, len(datalist), self.max_items), desc=desc, leave=False):
                 if idx + self.max_items > len(datalist):
                     ori_self_max_items = self.max_items
                     self.max_items = len(datalist) - idx
@@ -692,15 +656,14 @@ class MOSTest:
         layer_output_dict = {}
         for k, v in cached_layer_dict.items():
             if isinstance(v, torch.Tensor):
-                layer_output_dict[k]= v.clone().to(self.device)
+                layer_output_dict[k] = v.clone().to(self.device)
             elif isinstance(v, np.ndarray):
-                layer_output_dict[k]= torch.from_numpy(v).to(self.device)
+                layer_output_dict[k] = torch.from_numpy(v).to(self.device)
             else:
-                layer_output_dict[k]= copy.deepcopy(v)
+                layer_output_dict[k] = copy.deepcopy(v)
                 print(type(v))
 
         return layer_output_dict, cached_pred.copy()
-
 
     def check_stopping_criteria(self, generation: int, start_time: float, tknp_threshold: float = 0.20,
                                 sbc_threshold: float = 0.90, adc_threshold: float = 0.95) -> Tuple[bool, str]:
@@ -710,7 +673,7 @@ class MOSTest:
         # 1. Maximum runtime
         elapsed_time = time.time() - start_time
         elapsed_hours = elapsed_time / 3600
-        self.history["time"].append({f"gen_{generation}":elapsed_hours})
+        self.history["time"].append({f"gen_{generation}": elapsed_hours})
         if elapsed_hours >= self.max_runtime_hours:
             return True, f"Maximum runtime reached: {elapsed_hours:.2f}h / {self.max_runtime_hours}h"
 
@@ -720,7 +683,8 @@ class MOSTest:
         sbc = self.boundary_coverage.get_coverage()
         adc = self.activation_coverage.current
 
-        if (tknp_new / tknp_old) >= self.mostest_config.tknp_threshold and sbc >= self.mostest_config.sbc_threshold and adc >= self.mostest_config.adc_threshold:
+        if (
+                tknp_new / tknp_old) >= self.mostest_config.tknp_threshold and sbc >= self.mostest_config.sbc_threshold and adc >= self.mostest_config.adc_threshold:
             return True, f"Coverage thresholds met: TKNP={tknp_new:.3f}, SBC={sbc:.3f}, ADC={adc:.3f}"
 
         # 3. Coverage stagnation
@@ -746,30 +710,37 @@ class MOSTest:
         console.print(f"  Start: [dim]{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}[/dim]")
         console.print()
 
-        population = Chromosome.create_random_population(
-            self.optimizer.population_size,
-            transform_configs=self.transform_sequence,
-            spatial_enabled=False,
-            single_transform_init=True,
-            num_images=len(datalist)
-        )
+        if os.path.exists("./population.pth"):
+            population = torch.load("./population.pth")
+        else:
+            population = Chromosome.create_random_population(
+                self.optimizer.population_size,
+                datalist=datalist,
+                psnr_threshold=self.psnr_threshold,
+                transform_configs=self.transform_sequence,
+                spatial_enabled=False,
+                single_transform_init=True,
+                num_images=len(datalist)
+            )
 
-        console.print("[cyan]→[/cyan] Initializing population")
-        console.print(f"  Initial: [cyan]{len(population)}[/cyan] individuals")
+            console.print("[cyan]→[/cyan] Initializing population")
+            console.print(f"  Initial: [cyan]{len(population)}[/cyan] individuals")
 
-        population = self._evaluate_population(population, datalist, "  First generatio")
+            population = self._evaluate_population(population, datalist, "  First generatio")
 
-        console.print(f"  [green]✓[/green] Evaluated: [cyan]{len(population)}[/cyan] valid individuals\n")
+            console.print(f"  [green]✓[/green] Evaluated: [cyan]{len(population)}[/cyan] valid individuals\n")
 
-        # Save initial population (Generation 0)
-        console.print("[dim]  Saving initial population...[/dim]")
+            # Save initial population (Generation 0)
+            console.print("[dim]  Saving initial population...[/dim]")
 
-        # check code logic
-        self.save_generation_data(
-            generation=0,
-            population=population,
-            save_images=True
-        )
+            # check code logic
+            self.save_generation_data(
+                generation=0,
+                population=population,
+                save_images=True
+            )
+
+            torch.save(population,"./population.pth")
 
         # 3. Iterative optimization
         for generation in range(1, self.optimizer.max_generations + 1):
@@ -777,7 +748,7 @@ class MOSTest:
             console.print("[dim]" + "─" * 80 + "[/dim]")
 
             # 3.1 Create offspring
-            offspring = self.optimizer.create_offspring(population, generation)
+            offspring = self.optimizer.create_offspring(population, generation, datalist, psnr_threshold=self.psnr_threshold)
             console.print(f"\n[cyan]→[/cyan] Creating offspring: [dim]{len(population)} → {len(offspring)}[/dim]")
 
             # 3.2 Evaluate offspring
@@ -793,7 +764,7 @@ class MOSTest:
 
             uuids = [ind.muta_data["uuid"] for ind in population]
             self.muta_seed_prediction_cache = {key: self.muta_seed_prediction_cache[key] for key in uuids}
-            
+
             # 3.4 Update coverage
             self.update_coverage(population)
 
@@ -835,7 +806,7 @@ class MOSTest:
                 if verbose:
                     console.print(f"\n[yellow]⚠[/yellow] Stopping: [dim]{reason}[/dim]")
                 break
-            
+
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -914,4 +885,3 @@ class MOSTest:
         self.save_output = None
 
         console.print("[green]✓ Resources cleaned up[/green]")
-

@@ -7,6 +7,9 @@ import random
 from rich.console import Console
 import numpy as np
 import itertools
+from tqdm import tqdm
+import time
+
 
 console = Console()
 
@@ -16,7 +19,6 @@ try:
 except (ImportError, ValueError):
     from core.chromosome import Chromosome
     from optimization.operators import UnifiedGeneticOperators
-
 
 def generate_reference_points(num_objectives: int, divisions: int = 4) -> np.ndarray:
     def generate_combinations(n_obj, div):
@@ -78,6 +80,7 @@ class NSGA3:
         self.reference_points = generate_reference_points(mostest_config.num_objectives, mostest_config.ref_point_divisions)
 
         self.genetic_ops = UnifiedGeneticOperators(
+            max_transforms = mostest_config.max_transforms,
             crossover_prob=mostest_config.crossover_prob
         )
 
@@ -247,26 +250,69 @@ class NSGA3:
         return selected
 
     def tournament_selection(self, population: List[Chromosome]) -> Chromosome:
+        """
+        Single tournament selection - kept for backward compatibility
+        For better performance, use batch_tournament_selection when selecting multiple parents
+        """
         tournament = random.sample(population, self.tournament_size)
         best = min(tournament, key=lambda x: x.rank)
         return best
 
-    def create_offspring(self, population: List[Chromosome], generation: int) -> List[Chromosome]:
+    def batch_tournament_selection(self, population: List[Chromosome], num_selections: int) -> List[Chromosome]:
+        pop_size = len(population)
+
+        # Extract ranks to numpy array for faster access
+        ranks = np.array([ind.rank for ind in population], dtype=np.int64)
+
+        # Generate all tournament indices at once (num_selections x tournament_size)
+        tournament_indices = np.random.randint(0, pop_size, size=(num_selections, self.tournament_size), dtype=np.int64)
+
+        # Use NumPy vectorization (still much faster than original loop)
+        tournament_ranks = ranks[tournament_indices]  # shape: (num_selections, tournament_size)
+        best_positions = np.argmin(tournament_ranks, axis=1)  # shape: (num_selections,)
+        selected_indices = tournament_indices[np.arange(num_selections), best_positions]
+
+        # Return selected individuals
+        return [population[idx] for idx in selected_indices]
+
+    def create_offspring(self, population: List[Chromosome], generation: int, datalist, psnr_threshold) -> List[Chromosome]:
         offspring = []
+        pabr = tqdm(total=self.population_size, desc="Creating Offspring")
 
         mutation_rate = self.genetic_ops.adaptive_mutation_rate(
             generation, self.max_generations
         )
 
-        while len(offspring) < self.population_size:
-            parent1 = self.tournament_selection(population)
-            parent2 = self.tournament_selection(population)
+        num_pairs = (self.population_size + 1) // 2
+        num_parents_needed = num_pairs * 2
+
+        start_time = time.time()
+        selected_parents = self.batch_tournament_selection(population, num_parents_needed)
+        end_time = time.time()
+        print("batch_tournament_selection", end_time - start_time)
+
+        # Create offspring in pairs
+        for i in range(num_pairs):
+            parent1 = selected_parents[2 * i]
+            parent2 = selected_parents[2 * i + 1]
 
             child1, child2 = self.genetic_ops.sbx_crossover(parent1, parent2)
 
             child1 = self.genetic_ops.polynomial_mutation(child1, mutation_rate)
             child2 = self.genetic_ops.polynomial_mutation(child2, mutation_rate)
 
-            offspring.extend([child1, child2])
+            start_time = time.time()
+            valid1 = child1.check_chromosome_validity(datalist, psnr_threshold)
+            valid2 = child2.check_chromosome_validity(datalist, psnr_threshold)
+            end_time = time.time()
+            print("valid", end_time - start_time)
+
+            if valid1:
+                offspring.append(child1)
+                pabr.update(1)
+
+            if valid2:
+                offspring.append(child2)
+                pabr.update(1)
 
         return offspring[:self.population_size]

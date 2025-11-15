@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from anyio.lowlevel import checkpoint
 from mmseg.utils import register_all_modules
-from utility1 import get_file_device
+from utility import get_file_device
 from img_conv import get_image_data
 from mostest.main import MOSTest
 from mostest.mostconfig import get_config
